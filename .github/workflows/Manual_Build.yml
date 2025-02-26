@@ -89,7 +89,7 @@ jobs:
           sudo ls /usr/lib/gcc/aarch64-linux-gnu/
 
           # pip install --upgrade pip
-          pip install -q setuptools==68.0.0 ninja packaging wheel
+          pip install -q setuptools==68.0.0 ninja packaging wheel pyyaml
           if [ "${{ inputs.python_version }}" = "3.11" ]; then
             pip install -q numpy==1.23.2
           else
