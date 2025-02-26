@@ -86,7 +86,7 @@ jobs:
           export PATH=/usr/lib/gcc/aarch64-linux-gnu/10:$PATH
 
           gcc --version && cmake --version
-          sudo ls /usr/lib/gcc/aarch64-linux-gnu/
+          echo files: $(sudo ls /usr/lib/gcc/aarch64-linux-gnu/)
 
           # pip install --upgrade pip
           pip install -q setuptools==68.0.0 ninja packaging wheel pyyaml
@@ -98,14 +98,14 @@ jobs:
 
           pip install -q --no-cache-dir torch==${{ inputs.torch_version }}
 
-          python --version
+          python -V && pip -V
           python -c "import torch; print('PyTorch:', torch.__version__); "
         shell: bash
 
       - name: Build wheel
         id: build_wheel
         run: |
-          PATH=/usr/lib/gcc/aarch64-linux-gnu/10:$PATH MAX_JOBS=2 bash ci/build.sh --python=${{ inputs.python_version }}
+          PATH=/usr/lib/gcc/aarch64-linux-gnu/10:$PATH _GLIBCXX_USE_CXX11_ABI=0 MAX_JOBS=2 bash ci/build.sh --python=${{ inputs.python_version }}
 
           wheel_name=$(ls dist/*whl | xargs -n 1 basename)
           echo "wheel_name=${{ github.workspace }}/dist/${wheel_name}" >> $GITHUB_ENV
