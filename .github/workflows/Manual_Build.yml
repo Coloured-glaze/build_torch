@@ -1,0 +1,135 @@
+
+name: Manual build wheel package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'branch name or version tag or commit hash: main / v2.6.0 / acdefg'
+        default: 'v2.6.0'
+        required: true
+        type: string
+      python_version:
+        description: 'python_version'
+        default: '3.10'
+        required: true
+        type: string
+      torch_version:
+        description: 'torch_version'
+        default: '2.6.0'
+        required: true
+        type: string
+      os_version:
+        description: 'os_version: ubuntu-latest, ubuntu-24.04, ubuntu-22.04, ubuntu-20.04'
+        default: 'ubuntu-22.04-arm'
+        required: true
+        type: string
+      upload_artifact:
+        description: 'upload artifact: 0 or 1'
+        default: '0'
+        required: true
+        type: string
+      addl_info:
+        description: 'additional information'
+        default: ''
+        required: false
+        type: string
+
+jobs:
+
+  wheel:
+    name: ${{ inputs.os_version }}-py${{ inputs.python_version }}-th${{ inputs.torch_version }}
+    runs-on: ubuntu-22.04-arm
+
+    steps:
+      - name: Print release tag
+        run: |
+          echo ${{ inputs.addl_info }}${{ inputs.version }}-py${{ inputs.python_version }}-th${{ inputs.torch_version }}-${{ inputs.os_version }}
+          df -h ${{ github.workspace }} && free -g && lscpu
+        shell: bash
+
+      - name: Free up disk space
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+
+      - name: Set up swap space
+        if: runner.os == 'Linux'
+        uses: pierotofy/set-swap-space@v1.0
+        with:
+          swap-size-gb: 10
+      
+      - name: Checkout
+        uses: actions/checkout@v4.1.7
+        with:
+          ref: ${{ inputs.version }}
+          submodules: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5.2.0
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install PyTorch ${{ inputs.torch_version }}
+        run: |
+          apt install -qq gcc-10 g++-10 cmake git
+
+          ln -s /usr/bin/gcc-10 /usr/bin/gcc
+          ln -s /usr/bin/g++-10 /usr/bin/g++
+          ln -s /usr/bin/gcc /usr/bin/cc
+          ln -s /usr/bin/g++ /usr/bin/c++
+          export PATH=/usr/lib/gcc/aarch64-linux-gnu/10:$PATH
+
+          gcc --version && cmake --version
+
+          # pip install --upgrade pip
+          pip install -q setuptools==68.0.0 ninja packaging wheel
+          if [ "${{ inputs.python_version }}" = "3.11" ]; then
+            pip install -q numpy==1.23.2
+          else
+            pip install -q numpy==1.21.3
+          fi
+
+          pip install -q --no-cache-dir torch==${{ inputs.torch_version }}
+
+          python --version
+          python -c "import torch; print('PyTorch:', torch.__version__); "
+        shell: bash
+
+      - name: Build wheel
+        id: build_wheel
+        run: |
+          PATH=/usr/lib/gcc/aarch64-linux-gnu/10:$PATH MAX_JOBS=2 bash ci/build.sh --python=${{ inputs.python_version }}
+
+          wheel_name=$(ls dist/*whl | xargs -n 1 basename)
+          echo "wheel_name=${{ github.workspace }}/dist/${wheel_name}" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Print wheel path
+        id: wheel_path
+        run: |
+          ls -lh dist
+          wheel_path=$(find ${{ github.workspace }}/dist/ -name "*.whl")
+          echo "wheel_path=$wheel_path" >> "$GITHUB_OUTPUT"
+          echo "wheel_path: $wheel_path"
+          echo "wheel_name: ${{ env.wheel_name }}"
+        shell: bash
+
+      - name: Upload artifact
+        if: ${{ inputs.upload_artifact == '1' }}
+        uses: actions/upload-artifact@v4.4.0
+        with:
+          name: ${{inputs.addl_info}}${{inputs.version}}-py${{ inputs.python_version }}}-th${{ inputs.torch_version }}-${{ inputs.os_version }}-${{ github.run_id }}
+          retention-days: 14
+          path: |
+            ${{ steps.build_wheel.outputs.wheel_name }}
+
+      - uses: softprops/action-gh-release@v2.0.8
+        with:
+          tag_name: ${{ inputs.addl_info }}${{ inputs.version }}-py${{ inputs.python_version }}}-th${{ inputs.torch_version }}-${{ inputs.os_version }}
+          files: |
+            ${{  steps.wheel_path.outputs.wheel_path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
