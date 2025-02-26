@@ -10,7 +10,7 @@ on:
         required: true
         type: string
       python_version:
-        description: 'python_version'
+        description: 'python_version: 3.10, 3.11'
         default: '3.10'
         required: true
         type: string
@@ -20,7 +20,7 @@ on:
         required: true
         type: string
       os_version:
-        description: 'os_version: ubuntu-latest, ubuntu-24.04, ubuntu-22.04, ubuntu-20.04'
+        description: 'os_version: ubuntu-24.04-arm, ubuntu-22.04-arm'
         default: 'ubuntu-22.04-arm'
         required: true
         type: string
@@ -76,17 +76,17 @@ jobs:
 
       - name: Install PyTorch ${{ inputs.torch_version }}
         run: |
-          sudo apt install -qq gcc-10 g++-10 cmake git
+          sudo apt install -qq gcc-10 g++-10 cmake git > /dev/null
           gcc --version && cmake --version
 
-          ln -sf /usr/bin/gcc-10 /usr/bin/gcc
-          ln -sf /usr/bin/g++-10 /usr/bin/g++
-          ln -sf /usr/bin/gcc /usr/bin/cc
-          ln -sf /usr/bin/g++ /usr/bin/c++
+          sudo ln -sf /usr/bin/gcc-10 /usr/bin/gcc
+          sudo ln -sf /usr/bin/g++-10 /usr/bin/g++
+          sudo ln -sf /usr/bin/gcc /usr/bin/cc
+          sudo ln -sf /usr/bin/g++ /usr/bin/c++
           export PATH=/usr/lib/gcc/aarch64-linux-gnu/10:$PATH
 
           gcc --version && cmake --version
-          ls /usr/lib/gcc/aarch64-linux-gnu/
+          sudo ls /usr/lib/gcc/aarch64-linux-gnu/
 
           # pip install --upgrade pip
           pip install -q setuptools==68.0.0 ninja packaging wheel
