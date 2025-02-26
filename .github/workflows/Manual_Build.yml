@@ -47,6 +47,12 @@ jobs:
           echo ${{ inputs.addl_info }}${{ inputs.version }}-py${{ inputs.python_version }}-th${{ inputs.torch_version }}-${{ inputs.os_version }}
           df -h ${{ github.workspace }} && free -g && lscpu
         shell: bash
+      
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+        with:
+          ref: ${{ inputs.version }}
+          submodules: true
 
       - name: Free up disk space
         if: ${{ runner.os == 'Linux' }}
@@ -59,13 +65,7 @@ jobs:
         if: runner.os == 'Linux'
         uses: pierotofy/set-swap-space@v1.0
         with:
-          swap-size-gb: 10
-      
-      - name: Checkout
-        uses: actions/checkout@v4.1.7
-        with:
-          ref: ${{ inputs.version }}
-          submodules: false
+          swap-size-gb: 8
 
       - name: Set up Python
         uses: actions/setup-python@v5.2.0
