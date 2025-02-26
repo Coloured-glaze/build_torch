@@ -76,7 +76,7 @@ jobs:
 
       - name: Install PyTorch ${{ inputs.torch_version }}
         run: |
-          apt install -qq gcc-10 g++-10 cmake git
+          sudo apt install -qq gcc-10 g++-10 cmake git
 
           ln -s /usr/bin/gcc-10 /usr/bin/gcc
           ln -s /usr/bin/g++-10 /usr/bin/g++
