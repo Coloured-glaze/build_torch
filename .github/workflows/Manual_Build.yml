@@ -88,6 +88,12 @@ jobs:
           gcc --version && cmake --version
           echo files: $(sudo ls /usr/lib/gcc/aarch64-linux-gnu/)
 
+          git clone --recursive https://github.com/pytorch/kineto.git
+          cd kineto/libkineto
+          mkdir build && cd build
+          cmake ..
+          make -j4 && make install
+
           # pip install --upgrade pip
           pip install -q setuptools==68.0.0 ninja packaging wheel pyyaml
           if [ "${{ inputs.python_version }}" = "3.11" ]; then
