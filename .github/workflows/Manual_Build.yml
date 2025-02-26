@@ -77,14 +77,16 @@ jobs:
       - name: Install PyTorch ${{ inputs.torch_version }}
         run: |
           sudo apt install -qq gcc-10 g++-10 cmake git
+          gcc --version && cmake --version
 
-          ln -s /usr/bin/gcc-10 /usr/bin/gcc
-          ln -s /usr/bin/g++-10 /usr/bin/g++
-          ln -s /usr/bin/gcc /usr/bin/cc
-          ln -s /usr/bin/g++ /usr/bin/c++
+          ln -sf /usr/bin/gcc-10 /usr/bin/gcc
+          ln -sf /usr/bin/g++-10 /usr/bin/g++
+          ln -sf /usr/bin/gcc /usr/bin/cc
+          ln -sf /usr/bin/g++ /usr/bin/c++
           export PATH=/usr/lib/gcc/aarch64-linux-gnu/10:$PATH
 
           gcc --version && cmake --version
+          ls /usr/lib/gcc/aarch64-linux-gnu/
 
           # pip install --upgrade pip
           pip install -q setuptools==68.0.0 ninja packaging wheel
