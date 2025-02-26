@@ -39,7 +39,7 @@ jobs:
 
   wheel:
     name: ${{ inputs.os_version }}-py${{ inputs.python_version }}-th${{ inputs.torch_version }}
-    runs-on: ubuntu-22.04-arm
+    runs-on: ${{ inputs.os_version }}
 
     steps:
       - name: Print release tag
