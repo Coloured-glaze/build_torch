@@ -102,14 +102,21 @@ jobs:
 
       - name: change cutlass annotation
         if: runner.os == 'Windows'
-        shell: bash
+        shell: python
         run: |
-          python -c "
           file = 'third_party/cutlass/include/cutlass/exmy_base.h'
           with open(file, 'r') as f:
               content = f.read()
-          target = '#if (CUTLASS_CXX17_OR_LATER)\n  static_assert(cutlass::platform::is_unsigned_v<Storage>, \"Use an unsigned integer for StorageType\");\n#endif'
-          replacement = '// #if (CUTLASS_CXX17_OR_LATER)\n//   static_assert(cutlass::platform::is_unsigned_v<Storage>, \"Use an unsigned integer for StorageType\");\n// #endif'
+          target = (
+              '#if (CUTLASS_CXX17_OR_LATER)\n'
+              '  static_assert(cutlass::platform::is_unsigned_v<Storage>, "Use an unsigned integer for StorageType");\n'
+              '#endif'
+          )
+          replacement = (
+              '// #if (CUTLASS_CXX17_OR_LATER)\n'
+              '//   static_assert(cutlass::platform::is_unsigned_v<Storage>, "Use an unsigned integer for StorageType");\n'
+              '// #endif'
+          )
           if target not in content:
               raise Exception(f'Target lines not found in {file}')
           content = content.replace(target, replacement)
@@ -121,7 +128,6 @@ jobs:
               for i, line in enumerate(lines, 1):
                   if 400 <= i <= 410:
                       print(f'{i}: {line}', end='')
-          "
 
       - name: Patch cuda.cmake for unsupported MSVC (Windows)
         if: runner.os == 'Windows'
@@ -194,6 +200,18 @@ jobs:
               f.write(f"CUDA_VERSION={cuda_full}\n")
           print(f"CUDA {cuda_short} -> {cuda_full}")
 
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          python -m pip install --no-cache-dir --upgrade pip
+          python -m pip install --no-cache-dir \
+            ninja cmake numpy wheel setuptools packaging \
+            pyyaml typing-extensions requests
+          # Install PyTorch build requirements
+          if [ -f requirements-build.txt ]; then
+            python -m pip install --no-cache-dir -r requirements-build.txt
+          fi
+      
       - name: Install CUDA Toolkit ${{ env.CUDA_VERSION }}
         uses: N-Storm/cuda-toolkit@v0.2.29
         id: cuda-toolkit
@@ -217,17 +235,6 @@ jobs:
           # Verify
           ls "${CUDA_HOME}/include/cudnn_version.h" && echo "cuDNN installed OK"
           grep -E "CUDNN_(MAJOR|MINOR|PATCHLEVEL)" "${CUDA_HOME}/include/cudnn_version.h"
-
-      - name: Install build dependencies
-        run: |
-          python -m pip install --no-cache-dir --upgrade pip
-          python -m pip install --no-cache-dir \
-            ninja cmake numpy wheel setuptools packaging \
-            pyyaml typing-extensions requests
-          # Install PyTorch build requirements
-          if [ -f requirements.txt ]; then
-            python -m pip install --no-cache-dir -r requirements.txt
-          fi
 
       - name: Print build environment
         shell: bash
