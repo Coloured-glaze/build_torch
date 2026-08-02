@@ -83,6 +83,10 @@ jobs:
       # CUDAFLAGS: "-allow-unsupported-compiler"
 
     steps:
+      - name: Enable Git long paths (Windows)
+        if: runner.os == 'Windows'
+        run: git config --system core.longpaths true
+
       - name: Checkout PyTorch official repository
         uses: actions/checkout@v5
         with:
