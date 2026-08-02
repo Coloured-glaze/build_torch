@@ -27,7 +27,7 @@ on:
       cuda_ver:
         description: 'CUDA version'
         required: true
-        default: '128'
+        default: '129'
         type: choice
         options:
           - "124"
@@ -42,8 +42,9 @@ on:
       cudnn_url:
         required: false
         type: string
-        default: 'https://developer.download.nvidia.cn/compute/cudnn/redist/cudnn/linux-x86_64/cudnn-linux-x86_64-9.10.2.21_cuda12-archive.tar.xz'
-        description: "cuDNN archive URL (leave empty to skip cuDNN)"
+        default: 'https://developer.download.nvidia.cn/compute/cudnn/redist/cudnn/windows-x86_64/cudnn-windows-x86_64-9.10.2.21_cuda12-archive.zip'
+        description: "cuDNN archive URL (leave empty to skip cuDNN), https://developer.download.nvidia.cn/compute/cudnn/redist/cudnn/windows-x86_64/cudnn-windows-x86_64-9.10.2.21_cuda12-archive.zip | https://developer.download.nvidia.cn/compute/cudnn/redist/cudnn/linux-x86_64/cudnn-linux-x86_64-9.10.2.21_cuda12-archive.tar.xz"
+
       max_jobs:
         required: false
         type: string
@@ -235,6 +236,35 @@ jobs:
           # Verify
           ls "${CUDA_HOME}/include/cudnn_version.h" && echo "cuDNN installed OK"
           grep -E "CUDNN_(MAJOR|MINOR|PATCHLEVEL)" "${CUDA_HOME}/include/cudnn_version.h"
+
+      - name: Download and install cuDNN (Windows)
+        if: ${{ runner.os == 'Windows' && inputs.cudnn_url != '' }}
+        shell: pwsh
+        run: |
+          $cudnnUrl = "${{ inputs.cudnn_url }}"
+          Write-Host "Downloading cuDNN from: $cudnnUrl"
+          $zipPath = "$env:TEMP\cudnn.zip"
+          $extractPath = "$env:TEMP\cudnn"
+          Invoke-WebRequest -Uri $cudnnUrl -OutFile $zipPath -UseBasicParsing
+          Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+          # cuDNN archive extracts to a single subfolder, find it
+          $cudnnRoot = Get-ChildItem -Path $extractPath -Directory | Select-Object -First 1
+          Write-Host "cuDNN extracted to: $($cudnnRoot.FullName)"
+          # Copy into CUDA toolkit directory
+          $cudaHome = "${{ steps.cuda-toolkit.outputs.CUDA_PATH }}"
+          Write-Host "Installing cuDNN into $cudaHome"
+          Copy-Item -Path "$($cudnnRoot.FullName)\include\*" -Destination "$cudaHome\include" -Recurse -Force
+          Copy-Item -Path "$($cudnnRoot.FullName)\lib\x64\*" -Destination "$cudaHome\lib\x64" -Recurse -Force
+          Copy-Item -Path "$($cudnnRoot.FullName)\bin\*" -Destination "$cudaHome\bin" -Recurse -Force
+          Remove-Item -Path $zipPath, $extractPath -Recurse -Force -ErrorAction SilentlyContinue
+          # Verify
+          if (Test-Path "$cudaHome\include\cudnn_version.h") {
+            Write-Host "cuDNN installed OK"
+            Select-String -Path "$cudaHome\include\cudnn_version.h" -Pattern "CUDNN_(MAJOR|MINOR|PATCHLEVEL)"
+          } else {
+            Write-Host "ERROR: cudnn_version.h not found"
+            exit 1
+          }
 
       - name: Print build environment
         shell: bash
