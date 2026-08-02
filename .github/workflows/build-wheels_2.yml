@@ -1,0 +1,284 @@
+name: Build PyTorch from Source 2
+
+on:
+  workflow_dispatch:
+    inputs:
+      os:
+        required: true
+        default: 'windows-2022'
+        description: "Target OS for build"
+        type: choice
+        options:
+          - "windows-latest"
+          - "windows-2025"
+          - "windows-2022"
+          - "ubuntu-latest"
+          - "ubuntu-22.04"
+      python:
+        required: true
+        type: string
+        default: '["3.10"]'
+        description: 'Python versions as JSON array, e.g. ["3.10", "3.12"]'
+      torch_ref:
+        required: true
+        type: string
+        default: 'v2.13.0'
+        description: "PyTorch git ref (tag/branch/commit), e.g. v2.13.0, main"
+      cuda_ver:
+        description: 'CUDA version'
+        required: true
+        default: '128'
+        type: choice
+        options:
+          - "124"
+          - "126"
+          - "128"
+          - "129"
+      cuda_arch_list:
+        required: true
+        type: string
+        default: '7.0'
+        description: "TORCH_CUDA_ARCH_LIST, e.g. 5.0;7.0;8.0;8.6+PTX"
+      cudnn_url:
+        required: false
+        type: string
+        default: 'https://developer.download.nvidia.cn/compute/cudnn/redist/cudnn/linux-x86_64/cudnn-linux-x86_64-9.10.2.21_cuda12-archive.tar.xz'
+        description: "cuDNN archive URL (leave empty to skip cuDNN)"
+      max_jobs:
+        required: false
+        type: string
+        default: '6'
+        description: "Parallel build jobs (RAM-intensive, keep low)"
+      release:
+        required: false
+        default: '0'
+        description: "Create release (1=yes, 0=no)"
+        type: choice
+        options:
+          - "0"
+          - "1"
+
+permissions:
+  contents: write
+
+jobs:
+  build_pytorch:
+    name: PyTorch ${{ inputs.torch_ref }} py${{ matrix.pyver }} cu${{ inputs.cuda_ver }} ${{ inputs.os }}
+    runs-on: ${{ inputs.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        pyver: ${{ fromJson(inputs.python) }}
+
+    env:
+      MAX_JOBS: ${{ inputs.max_jobs }}
+      TORCH_CUDA_ARCH_LIST: ${{ inputs.cuda_arch_list }}
+      USE_CUDA: "1"
+      USE_CUDNN: "1"
+      PYTHONUTF8: "1"
+      CMAKE_BUILD_TYPE: Release
+
+      # Allow nvcc to work with newer MSVC (VS2025+) on Windows
+      # CUDAFLAGS is read by CMake during enable_language(CUDA) compiler detection
+      # CUDAFLAGS: "-allow-unsupported-compiler"
+
+    steps:
+      - name: Checkout PyTorch official repository
+        uses: actions/checkout@v5
+        with:
+          repository: pytorch/pytorch
+          ref: ${{ inputs.torch_ref }}
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Set up Python ${{ matrix.pyver }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.pyver }}
+
+      - name: change cutlass annotation
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          python -c "
+          file = 'third_party/cutlass/include/cutlass/exmy_base.h'
+          with open(file, 'r') as f:
+              content = f.read()
+          target = '#if (CUTLASS_CXX17_OR_LATER)\n  static_assert(cutlass::platform::is_unsigned_v<Storage>, \"Use an unsigned integer for StorageType\");\n#endif'
+          replacement = '// #if (CUTLASS_CXX17_OR_LATER)\n//   static_assert(cutlass::platform::is_unsigned_v<Storage>, \"Use an unsigned integer for StorageType\");\n// #endif'
+          if target not in content:
+              raise Exception(f'Target lines not found in {file}')
+          content = content.replace(target, replacement)
+          with open(file, 'w') as f:
+              f.write(content)
+          print('Successfully commented out the target lines')
+          with open(file, 'r') as f:
+              lines = f.readlines()
+              for i, line in enumerate(lines, 1):
+                  if 400 <= i <= 410:
+                      print(f'{i}: {line}', end='')
+
+      - name: Patch cuda.cmake for unsupported MSVC (Windows)
+        if: runner.os == 'Windows'
+        shell: python
+        run: |
+          import re
+          file = 'cmake/public/cuda.cmake'
+          with open(file, 'r') as f:
+              content = f.read()
+          target = 'enable_language(CUDA)'
+          if target not in content:
+              raise Exception(f'{target} not found in {file}')
+          patch = (
+              '# Allow unsupported MSVC versions (e.g. VS2025+) to pass nvcc host compiler check\n'
+              'if(MSVC)\n'
+              '  string(APPEND CMAKE_CUDA_FLAGS " -allow-unsupported-compiler")\n'
+              'endif()\n'
+          )
+          if '-allow-unsupported-compiler' not in content:
+              content = content.replace(target, patch + target, 1)
+              with open(file, 'w') as f:
+                  f.write(content)
+              print('Patched cuda.cmake: added -allow-unsupported-compiler before enable_language(CUDA)')
+          else:
+              print('cuda.cmake already patched, skipping')
+
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1.13.0
+
+      - name: Free up disk space (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL 2>/dev/null
+          sudo apt-get clean
+          df -h
+
+      - name: Set up swap space (Linux)
+        if: runner.os == 'Linux'
+        uses: pierotofy/set-swap-space@v1.0
+        with:
+          swap-size-gb: 6
+
+      - name: Print system usage
+        shell: bash
+        run: |
+          echo "=== Disk Space ==="
+          df -h
+          echo ""
+          echo "=== Memory Usage ==="
+          if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
+            powershell -Command '$os = Get-CimInstance Win32_OperatingSystem; $total = [math]::Round($os.TotalVisibleMemorySize/1MB, 2); $free = [math]::Round($os.FreePhysicalMemory/1MB, 2); Write-Host ("Total: {0} GB | Free: {1} GB | Used: {2} GB" -f $total, $free, ($total-$free))'
+          else
+            free -h
+          fi
+
+      - name: Set CUDA version
+        shell: python
+        run: |
+          import os
+          cuda_map = {
+            "124": "12.4.1",
+            "126": "12.6.3",
+            "128": "12.8.1",
+            "129": "12.9.1",
+          }
+          cuda_short = "${{ inputs.cuda_ver }}"
+          cuda_full = cuda_map[cuda_short]
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"CUDA_VERSION={cuda_full}\n")
+          print(f"CUDA {cuda_short} -> {cuda_full}")
+
+      - name: Install CUDA Toolkit ${{ env.CUDA_VERSION }}
+        uses: N-Storm/cuda-toolkit@v0.2.29
+        id: cuda-toolkit
+        with:
+          cuda: "${{ env.CUDA_VERSION }}"
+          use-github-cache: false
+
+      - name: Download and install cuDNN (Linux)
+        if: ${{ runner.os == 'Linux' && inputs.cudnn_url != '' }}
+        run: |
+          echo "Downloading cuDNN from: ${{ inputs.cudnn_url }}"
+          wget -q "${{ inputs.cudnn_url }}" -O /tmp/cudnn.tar.xz
+          mkdir -p /tmp/cudnn
+          tar -xf /tmp/cudnn.tar.xz -C /tmp/cudnn --strip-components=1
+          # Copy into CUDA toolkit directory
+          CUDA_HOME="${{ steps.cuda-toolkit.outputs.CUDA_PATH }}"
+          echo "Installing cuDNN into ${CUDA_HOME}"
+          sudo cp -a /tmp/cudnn/include/* "${CUDA_HOME}/include/"
+          sudo cp -a /tmp/cudnn/lib/* "${CUDA_HOME}/lib64/"
+          rm -rf /tmp/cudnn /tmp/cudnn.tar.xz
+          # Verify
+          ls "${CUDA_HOME}/include/cudnn_version.h" && echo "cuDNN installed OK"
+          grep -E "CUDNN_(MAJOR|MINOR|PATCHLEVEL)" "${CUDA_HOME}/include/cudnn_version.h"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --no-cache-dir --upgrade pip
+          python -m pip install --no-cache-dir \
+            ninja cmake numpy wheel setuptools packaging \
+            pyyaml typing-extensions requests
+          # Install PyTorch build requirements
+          if [ -f requirements.txt ]; then
+            python -m pip install --no-cache-dir -r requirements.txt
+          fi
+
+      - name: Print build environment
+        shell: bash
+        run: |
+          echo "=== CUDA ==="
+          nvcc --version
+          echo "=== cuDNN ==="
+          if [ -n "$CUDA_PATH" ]; then
+            cat "$CUDA_PATH/include/cudnn_version.h" 2>/dev/null | grep -E "MAJOR|MINOR|PATCH" || echo "cuDNN header not found"
+          else
+            echo "CUDA_PATH not set"
+          fi
+          echo "=== TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST} ==="
+          echo "=== MAX_JOBS=${MAX_JOBS} ==="
+          echo "=== Disk ==="
+          df -h .
+          echo "=== Compiler ==="
+          if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+            cl 2>&1 | head -1 || true
+          else
+            gcc --version | head -1
+          fi
+
+      - name: Build PyTorch wheel
+        shell: bash
+        run: |
+          # python -m pip wheel . --no-build-isolation --no-deps -w dist 2>&1 | tee build.log
+          python -m pip wheel . --no-build-isolation --no-deps -w dist 
+
+      - name: List built wheels
+        shell: bash
+        run: ls -lh dist/*.whl
+
+      - name: Determine version
+        id: determine_version
+        shell: bash
+        run: |
+          whl=$(ls dist/torch-*.whl | head -1)
+          name=$(basename "$whl")
+          version=$(echo "$name" | sed -n 's/torch-\([^-]*\).*/\1/p')
+          echo "Version: $version"
+          echo "WHL_VERSION=$version" >> $GITHUB_ENV
+
+      - name: Upload wheel artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: torch-py${{ matrix.pyver }}-cu${{ inputs.cuda_ver }}-${{ inputs.os }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+      - name: Create Release
+        if: ${{ inputs.release == '1' }}
+        uses: softprops/action-gh-release@v2.6.2
+        with:
+          tag_name: torch-v${{ env.WHL_VERSION }}-cu${{ inputs.cuda_ver }}-$(date '+%F')
+          files: dist/*.whl
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
