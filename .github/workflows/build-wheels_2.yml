@@ -45,6 +45,14 @@ on:
         default: 'https://developer.download.nvidia.cn/compute/cudnn/redist/cudnn/windows-x86_64/cudnn-windows-x86_64-9.10.2.21_cuda12-archive.zip'
         description: "cuDNN archive URL (leave empty to skip cuDNN), https://developer.download.nvidia.cn/compute/cudnn/redist/cudnn/windows-x86_64/cudnn-windows-x86_64-9.10.2.21_cuda12-archive.zip | https://developer.download.nvidia.cn/compute/cudnn/redist/cudnn/linux-x86_64/cudnn-linux-x86_64-9.10.2.21_cuda12-archive.tar.xz"
 
+      skip_tests:
+        required: false
+        default: '1'
+        description: "Skip test components (1=yes, 0=no): sets BUILD_TEST=0 to skip compiling C++ test binaries (gtest/test_torch etc.), and patches setup.py to exclude torch/test from the wheel (smaller wheel). torch.testing runtime API is kept."
+        type: choice
+        options:
+          - "1"
+          - "0"
       max_jobs:
         required: false
         type: string
@@ -78,6 +86,8 @@ jobs:
       USE_CUDNN: "1"
       PYTHONUTF8: "1"
       CMAKE_BUILD_TYPE: Release
+      # When skip_tests=1, disable C++ test binaries build (gtest, test_torch, etc.) to save compile time
+      BUILD_TEST: ${{ inputs.skip_tests == '1' && '0' || '1' }}
 
       # Allow nvcc to work with newer MSVC (VS2025+) on Windows
       # CUDAFLAGS is read by CMake during enable_language(CUDA) compiler detection
@@ -154,6 +164,31 @@ jobs:
               print('Patched cuda.cmake: added -allow-unsupported-compiler before enable_language(CUDA)')
           else:
               print('cuda.cmake already patched, skipping')
+
+      - name: Exclude torch/test from wheel (optional)
+        if: ${{ inputs.skip_tests == '1' }}
+        shell: python
+        run: |
+          import re
+          file = 'setup.py'
+          with open(file, 'r', encoding='utf-8') as f:
+              content = f.read()
+          if 'torch.test' in content:
+              print('setup.py already excludes torch.test, skipping')
+          else:
+              # find_packages(include=["torch", "torch.*"]) would package torch/test
+              # into the wheel (pure Python test files, tens of MBs).
+              # Extend the excludes list right after its definition to strip it.
+              # NOTE: "torch.test" matches exactly, torch.testing (runtime API) is NOT affected.
+              m = re.search(r'^(\s*)excludes\s*=\s*\[[^\]]*\]', content, re.M)
+              if not m:
+                  raise Exception('excludes = [...] line not found in setup.py')
+              indent = m.group(1)
+              patch = m.group(0) + '\n' + indent + 'excludes.extend(["torch.test", "torch.test.*"])  # strip test files from wheel'
+              content = content.replace(m.group(0), patch, 1)
+              with open(file, 'w', encoding='utf-8') as f:
+                  f.write(content)
+              print('Patched setup.py: torch/test excluded from wheel packages')
 
       - name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
@@ -279,6 +314,7 @@ jobs:
           fi
           echo "=== TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST} ==="
           echo "=== MAX_JOBS=${MAX_JOBS} ==="
+          echo "=== BUILD_TEST=${BUILD_TEST} ==="
           echo "=== Disk ==="
           df -h .
           echo "=== Compiler ==="
@@ -297,6 +333,17 @@ jobs:
       - name: List built wheels
         shell: bash
         run: ls -lh dist/*.whl
+
+      - name: Verify torch/test exclusion
+        if: ${{ inputs.skip_tests == '1' }}
+        shell: bash
+        run: |
+          whl=$(ls dist/torch-*.whl | head -1)
+          if python -m zipfile -l "$whl" | grep -q "torch/test/"; then
+            echo "::warning::torch/test still present in wheel"
+          else
+            echo "torch/test excluded from wheel OK"
+          fi
 
       - name: Determine version
         id: determine_version
