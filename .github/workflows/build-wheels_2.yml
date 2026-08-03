@@ -66,6 +66,11 @@ on:
         options:
           - "0"
           - "1"
+      hf_param:
+        required: false
+        type: string
+        default: ''
+        description: "HuggingFace upload params: repo_ids;repo_types;token (e.g. xx/xx;dataset;hf_xxx), spaces auto-trimmed. Leave empty to skip HF upload."
 
 permissions:
   contents: write
@@ -84,6 +89,8 @@ jobs:
       TORCH_CUDA_ARCH_LIST: ${{ inputs.cuda_arch_list }}
       USE_CUDA: "1"
       USE_CUDNN: "1"
+      USE_DISTRIBUTED: "1"
+      USE_GLOO: "1"
       PYTHONUTF8: "1"
       CMAKE_BUILD_TYPE: Release
       # When skip_tests=1, disable C++ test binaries build (gtest, test_torch, etc.) to save compile time
@@ -315,6 +322,8 @@ jobs:
           echo "=== TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST} ==="
           echo "=== MAX_JOBS=${MAX_JOBS} ==="
           echo "=== BUILD_TEST=${BUILD_TEST} ==="
+          echo "=== USE_DISTRIBUTED=${USE_DISTRIBUTED} ==="
+          echo "=== USE_GLOO=${USE_GLOO} ==="
           echo "=== Disk ==="
           df -h .
           echo "=== Compiler ==="
@@ -358,16 +367,119 @@ jobs:
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v5
         with:
-          name: torch-py${{ matrix.pyver }}-cu${{ inputs.cuda_ver }}-${{ inputs.os }}
+          name: torch-v${{ env.WHL_VERSION }}-cu${{ inputs.cuda_ver }}-${{ inputs.os }}
           path: dist/*.whl
           if-no-files-found: error
+
+      - name: Install huggingface_hub
+        if: ${{ inputs.hf_param != '' }}
+        shell: bash
+        run: python -m pip install --no-cache-dir huggingface_hub
+
+      - name: Upload wheels to HuggingFace
+        if: ${{ inputs.hf_param != '' }}
+        shell: python
+        run: |
+          import os
+          import glob
+          from huggingface_hub import upload_file
+
+          hf_param = "${{ inputs.hf_param }}"
+          parts = [p.strip() for p in hf_param.split(';')]
+          if len(parts) != 3:
+              print(f"hf_param must be 'repo_ids;repo_types;token'")
+              exit(0)
+          repo_id, repo_type, token = parts
+          if not (repo_id and repo_type and token):
+              print(f"hf_param parts must be non-empty after trim: {parts}")
+              exit(0) 
+          whl_files = glob.glob('dist/*.whl')
+          if not whl_files:
+              print("No .whl files found in dist/")
+              exit(0) 
+          print(f"Uploading {len(whl_files)} wheel(s) to {repo_id} ({repo_type})")
+          for whl in whl_files:
+              path_in_repo = os.path.basename(whl)
+              print(f"  -> {path_in_repo}")
+              upload_file(
+                  token=token, repo_id=repo_id, repo_type=repo_type,
+                  path_or_fileobj=whl, path_in_repo=path_in_repo,
+              )
+          print(f"All {len(whl_files)} wheel(s) uploaded to {repo_id}")
+
+      - name: Prepare release assets (split wheels > 1GB into chunks)
+        if: ${{ inputs.release == '1' }}
+        shell: python
+        run: |
+          import hashlib
+          import shutil
+          from pathlib import Path
+
+          # GitHub release assets hard limit is 2 GiB (2147483648 bytes).
+          # Split at 1 GiB so each chunk is well under the limit.
+          CHUNK = 1024 * 1024 * 1024  # 1 GiB
+
+          src = Path("dist")
+          dst = Path("release_assets")
+          # Clean slate so stale chunks from previous runs don't leak in.
+          if dst.exists():
+              shutil.rmtree(dst)
+          dst.mkdir(parents=True)
+
+          def sha256_file(p):
+              h = hashlib.sha256()
+              with open(p, "rb") as f:
+                  for b in iter(lambda: f.read(1024 * 1024), b""):
+                      h.update(b)
+              return h.hexdigest()
+
+          for whl in sorted(src.glob("*.whl")):
+              size = whl.stat().st_size
+              if size > CHUNK:
+                  n = (size + CHUNK - 1) // CHUNK
+                  print(f"[SPLIT] {whl.name} ({size} bytes) -> {n} chunks of 1 GiB")
+                  h = hashlib.sha256()
+                  with open(whl, "rb") as f:
+                      idx = 0
+                      while True:
+                          buf = f.read(CHUNK)
+                          if not buf:
+                              break
+                          h.update(buf)
+                          part = dst / f"{whl.name}.part{idx:03d}"
+                          with open(part, "wb") as pf:
+                              pf.write(buf)
+                          print(f"  -> {part.name} ({len(buf)} bytes)")
+                          idx += 1
+                  digest = h.hexdigest()
+              else:
+                  print(f"[COPY]  {whl.name} ({size} bytes) - under 1 GiB, no split")
+                  digest = sha256_file(whl)
+                  shutil.copy2(whl, dst / whl.name)
+              (dst / f"{whl.name}.sha256").write_text(f"{digest}  {whl.name}\n")
+              print(f"  sha256: {digest}")
+
+          print("\n=== Release assets ===")
+          for p in sorted(dst.iterdir()):
+              print(f"  {p.name}  ({p.stat().st_size} bytes)")
 
       - name: Create Release
         if: ${{ inputs.release == '1' }}
         uses: softprops/action-gh-release@v2.6.2
         with:
           tag_name: torch-v${{ env.WHL_VERSION }}-cu${{ inputs.cuda_ver }}-$(date '+%F')
-          files: dist/*.whl
+          files: release_assets/*
           generate_release_notes: true
+          body: |
+            Wheels larger than 1 GiB are split into chunks: `<name>.whl.part000`, `<name>.whl.part001`, ...
+            Each wheel has a `<name>.whl.sha256` sidecar with the SHA-256 of the original file.
+
+            Restore & install:
+            1. Download all `*.partNNN` chunks and the matching `.sha256` file.
+            2. Concatenate in order:
+               `cat torch-*.whl.part* > torch.whl`                                    (Linux/macOS/Git Bash)
+               `copy /b torch-*.whl.part000+torch-*.whl.part001+torch-*.whl.part002 torch.whl`  (cmd.exe)
+            3. Verify: rename to original name then `sha256sum -c <name>.whl.sha256`
+            4. Install: `pip install torch.whl`
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
