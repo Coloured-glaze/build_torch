@@ -367,7 +367,8 @@ jobs:
           # literally to the action. Also sanitize '+' (PEP 440 local version)
           # to '_' for a safer git tag.
           tag_version="${version//+/_}"
-          tag="torch-v${tag_version}-cu${{ inputs.cuda_ver }}-py${{ matrix.pyver }}-$(date '+%F')"
+          arch_list="${TORCH_CUDA_ARCH_LIST//;/-}"
+          tag="torch-v${tag_version}-cu${{ inputs.cuda_ver }}-py${{ matrix.pyver }}-sm${arch_list}-$(date '+%F')"
           echo "Release tag: $tag"
           echo "RELEASE_TAG=$tag" >> $GITHUB_ENV
 
