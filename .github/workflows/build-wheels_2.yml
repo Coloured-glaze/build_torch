@@ -374,7 +374,7 @@ jobs:
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v5
         with:
-          name: torch-v${{ env.WHL_VERSION }}-cu${{ inputs.cuda_ver }}-py${{ matrix.pyver }}-${{ inputs.os }}
+          name: torch-${{ env.WHL_VERSION }}-cu${{ inputs.cuda_ver }}-py${{ matrix.pyver }}-${{ inputs.os }}
           path: dist/*.whl
           if-no-files-found: error
 
