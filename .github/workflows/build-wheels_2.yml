@@ -363,6 +363,13 @@ jobs:
           version=$(echo "$name" | sed -n 's/torch-\([^-]*\).*/\1/p')
           echo "Version: $version"
           echo "WHL_VERSION=$version" >> $GITHUB_ENV
+          # Build release tag in shell so $(date) is expanded here, not passed
+          # literally to the action. Also sanitize '+' (PEP 440 local version)
+          # to '_' for a safer git tag.
+          tag_version="${version//+/_}"
+          tag="torch-v${tag_version}-cu${{ inputs.cuda_ver }}-py${{ matrix.pyver }}-$(date '+%F')"
+          echo "Release tag: $tag"
+          echo "RELEASE_TAG=$tag" >> $GITHUB_ENV
 
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v5
@@ -467,7 +474,7 @@ jobs:
         if: ${{ inputs.release == '1' }}
         uses: softprops/action-gh-release@v2.6.2
         with:
-          tag_name: torch-v${{ env.WHL_VERSION }}-cu${{ inputs.cuda_ver }}-$(date '+%F')
+          tag_name: ${{ env.RELEASE_TAG }}
           files: release_assets/*
           generate_release_notes: true
           body: |
