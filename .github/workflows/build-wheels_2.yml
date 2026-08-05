@@ -434,6 +434,11 @@ jobs:
               shutil.rmtree(dst)
           dst.mkdir(parents=True)
 
+          def sha256_bytes(b):
+              h = hashlib.sha256()
+              h.update(b)
+              return h.hexdigest()
+
           def sha256_file(p):
               h = hashlib.sha256()
               with open(p, "rb") as f:
@@ -441,12 +446,17 @@ jobs:
                       h.update(b)
               return h.hexdigest()
 
+          # Manifest format (one entry per line; lines starting with # are comments):
+          #   <sha256>  <size>  <filename>
+          # For a chunked wheel, the first line is the original (merged) wheel
+          # and each subsequent line is a .partNNN chunk with its own sha+size.
           for whl in sorted(src.glob("*.whl")):
               size = whl.stat().st_size
               if size > CHUNK:
                   n = (size + CHUNK - 1) // CHUNK
                   print(f"[SPLIT] {whl.name} ({size} bytes) -> {n} chunks of 1 GiB")
                   h = hashlib.sha256()
+                  chunk_lines = []
                   with open(whl, "rb") as f:
                       idx = 0
                       while True:
@@ -454,18 +464,30 @@ jobs:
                           if not buf:
                               break
                           h.update(buf)
-                          part = dst / f"{whl.name}.part{idx:03d}"
+                          part_name = f"{whl.name}.part{idx:03d}"
+                          part = dst / part_name
                           with open(part, "wb") as pf:
                               pf.write(buf)
-                          print(f"  -> {part.name} ({len(buf)} bytes)")
+                          part_sha = sha256_bytes(buf)
+                          chunk_lines.append(f"{part_sha}  {len(buf)}  {part_name}")
+                          print(f"  -> {part_name} ({len(buf)} bytes) sha256={part_sha}")
                           idx += 1
                   digest = h.hexdigest()
+                  # Original wheel first, then per-chunk entries.
+                  manifest = (
+                      f"{digest}  {size}  {whl.name}\n"
+                      + "\n".join(chunk_lines) + "\n"
+                  )
+                  (dst / f"{whl.name}.sha256").write_text(manifest)
+                  print(f"  original sha256: {digest}")
               else:
                   print(f"[COPY]  {whl.name} ({size} bytes) - under 1 GiB, no split")
                   digest = sha256_file(whl)
                   shutil.copy2(whl, dst / whl.name)
-              (dst / f"{whl.name}.sha256").write_text(f"{digest}  {whl.name}\n")
-              print(f"  sha256: {digest}")
+                  (dst / f"{whl.name}.sha256").write_text(
+                      f"{digest}  {size}  {whl.name}\n"
+                  )
+                  print(f"  sha256: {digest}")
 
           print("\n=== Release assets ===")
           for p in sorted(dst.iterdir()):
